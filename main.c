@@ -41,6 +41,20 @@
 #include <xc.h>
 #include <stdbool.h>
 #include <string.h>
+#include "FatFs/diskio_hardware.h"
+#include "FatFs/ff.h"
+
+#define	LED_TRIS	(TRISBbits.TRISB5)
+#define	LED_LAT		(LATBbits.LATB5)
+#define	LED(on)		(LED_LAT = (on))
+
+static FATFS fs;
+static FIL fp;
+
+void MMC_AccessLamp(bool on)
+{
+	LED(on);
+}
 
 void setup()
 {
@@ -51,10 +65,25 @@ void setup()
 	TRISA = 0xFF;
 	TRISB = 0xFF;
 	TRISC = 0xFF;
+	
+	LED(false);
+	LED_TRIS = 0;
+	
+	MMC_Init();
 }
 
 void loop()
 {
+	f_mount(&fs, "0:", 0);
+	if(f_open(&fp, "TEST.TXT", FA_OPEN_APPEND | FA_WRITE | FA_READ) == FR_OK) {
+		f_puts("Hello, world!!\n", &fp);
+
+		f_close(&fp);
+	}
+
+	f_unmount("0:");
+	
+	__delay_ms(1000);
 }
 
 void main(void)
@@ -62,4 +91,9 @@ void main(void)
 	setup();
 	while(1)
 		loop();
+}
+
+void __interrupt() isr(void)
+{
+    MMC_Interrupt();
 }
