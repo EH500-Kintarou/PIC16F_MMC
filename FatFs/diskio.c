@@ -445,17 +445,18 @@ DRESULT disk_write (
 /*-----------------------------------------------------------------------*/
 
 DRESULT disk_ioctl (
-	BYTE pdrv,		/* Physical drive nmuber (0..) */
-	BYTE cmd,		/* Control code */
-	void *buff		/* Buffer to send/receive control data */
+	BYTE pdrv,		// Physical drive nmuber (0..)
+	BYTE cmd,		// Control code
+	void *buff		// Buffer to send/receive control data
 )
 {
-LATBbits.LATB5 = 1;
-    
 	DRESULT res;
-	BYTE n, csd[16], *ptr = buff;
+	BYTE n, csd[16];
     DWORD csize;
-#if 0
+#if CMD_FATFS_NOT_USED
+	BYTE *ptr = buff;
+#endif
+#if _USE_ERASE
 	DWORD *dp, st, ed;
 #endif
     
@@ -464,120 +465,121 @@ LATBbits.LATB5 = 1;
 
 	res = RES_ERROR;
 
-	if(cmd == CTRL_POWER) {
+	if(DiskStat & STA_NOINIT)
+		return RES_NOTRDY;
+
+	switch (cmd) {
+	case CTRL_SYNC :		// Make sure that no pending write process. Do not remove this or written sector might not left updated. 
+		if(MMC_select())
+			return RES_OK;
+		break;
+
+	case GET_SECTOR_COUNT :	// Get number of sectors on the disk (DWORD) 
+		if ((MMC_send_cmd(CMD9, 0) == 0) && MMC_ReceiveDataBlock(csd, 16)) {
+			if ((csd[0] >> 6) == 1) {	// SDC ver 2.00 
+				csize = csd[9] + ((WORD)csd[8] << 8) + ((DWORD)(csd[7] & 63) << 16) + 1;
+				*(DWORD*)buff = csize << 10;
+			} else {					// SDC ver 1.XX or MMC
+				n = (BYTE)((csd[5] & 15) + ((csd[10] & 128) >> 7) + ((csd[9] & 3) << 1) + 2);
+				csize = (csd[8] >> 6) + ((WORD)csd[7] << 2) + ((WORD)(csd[6] & 3) << 10) + 1;
+				*(DWORD*)buff = csize << (n - 9);
+			}
+			res = RES_OK;
+		}
+		break;
+
+	case GET_SECTOR_SIZE :	// Get sector size (WORD) 
+		*(WORD*)buff = 512;
+		res = RES_OK;
+		break;
+
+	case GET_BLOCK_SIZE :	// Get erase block size in unit of sector (DWORD) 
+		if (CardType & CT_SD2) {	// SDv2? 
+			if (MMC_send_cmd(ACMD13, 0) == 0) {	// Read SD status 
+				MMC_SendSPI(0xFF);
+				if (MMC_ReceiveDataBlock(csd, 16)) {				// Read partial block 
+					for (n = 64 - 16; n; n--) MMC_SendSPI(0xFF);	// Purge trailing data 
+					*(DWORD*)buff = 16UL << (csd[10] >> 4);
+					res = RES_OK;
+				}
+			}
+		} else {					// SDv1 or MMCv3 
+			if ((MMC_send_cmd(CMD9, 0) == 0) && MMC_ReceiveDataBlock(csd, 16)) {	// Read CSD 
+				if (CardType & CT_SD1) {	// SDv1 
+					*(DWORD*)buff = (((WORD)(csd[10] & 63) << 1) + ((WORD)(csd[11] & 128) >> 7) + 1) << ((csd[13] >> 6) - 1);
+				} else {					// MMCv3 
+					*(DWORD*)buff = ((DWORD)((csd[10] & 124) >> 2) + 1) * ((BYTE)(((csd[11] & 3) << 3) + ((csd[11] & 224) >> 5) + 1));
+				}
+				res = RES_OK;
+			}
+		}
+		break;
+#if _USE_ERASE
+	case CTRL_ERASE_SECTOR :	// Erase a block of sectors (used when _USE_ERASE == 1) 
+		if (!(CardType & CT_SDC)) break;				// Check if the card is SDC 
+		if (disk_ioctl(drv, MMC_GET_CSD, csd)) break;	// Get CSD 
+		if (!(csd[0] >> 6) && !(csd[10] & 0x40)) break;	// Check if sector erase can be applied to the card 
+		dp = buff; st = dp[0]; ed = dp[1];				// Load sector block 
+		if (!(CardType & CT_BLOCK)) {
+			st *= 512; ed *= 512;
+		}
+		if (send_cmd(CMD32, st) == 0 && send_cmd(CMD33, ed) == 0 && send_cmd(CMD38, 0) == 0 && wait_ready(30000))	// Erase sector block 
+			res = RES_OK;	// FatFs does not check result of this command 
+		break;
+#endif
+#if CMD_FATFS_NOT_USED
+	// Following commands are never used by FatFs module 
+	case MMC_GET_TYPE :		// Get card type flags (1 byte)
+		*ptr = CardType;
+		res = RES_OK;
+		break;
+
+	case MMC_GET_CSD :		// Receive CSD as a data block (16 bytes)
+		if (MMC_send_cmd(CMD9, 0) == 0		// READ_CSD
+			&& MMC_ReceiveDataBlock(ptr, 16))
+			res = RES_OK;
+		break;
+
+	case MMC_GET_CID :		// Receive CID as a data block (16 bytes)
+		if (MMC_send_cmd(CMD10, 0) == 0		// READ_CID
+			&& MMC_ReceiveDataBlock(ptr, 16))
+			res = RES_OK;
+		break;
+
+	case MMC_GET_OCR :		// Receive OCR as an R3 resp (4 bytes)
+		if (MMC_send_cmd(CMD58, 0) == 0) {	// READ_OCR
+			for (n = 4; n; n--) *ptr++ = MMC_SendSPI(0xFF);
+			res = RES_OK;
+		}
+		break;
+
+	case MMC_GET_SDSTAT :	// Receive SD statsu as a data block (64 bytes)
+		if (MMC_send_cmd(ACMD13, 0) == 0) {	// SD_STATUS
+			MMC_SendSPI(0xFF);
+			if (MMC_ReceiveDataBlock(ptr, 64))
+				res = RES_OK;
+		}
+		break;
+	case CTRL_POWER:
 		switch (ptr[0]) {
-		case 0:		/* Sub control code (POWER_OFF) */
-            MMC_ChipEnable(false);
+		case 0:		// Sub control code (POWER_OFF) 
+			MMC_ChipEnable(false);
 			res = RES_OK;
 			break;
-		case 1:		/* Sub control code (POWER_GET) */
-            ptr[1] = MMC_IsChipEnable();
+		case 1:		// Sub control code (POWER_GET) 
+			ptr[1] = MMC_IsChipEnable();
 			res = RES_OK;
 			break;
 		default :
 			res = RES_PARERR;
 		}
-	} else {
-		if (DiskStat & STA_NOINIT) return RES_NOTRDY;
-
-		switch (cmd) {
-		case CTRL_SYNC :		/* Make sure that no pending write process. Do not remove this or written sector might not left updated. */
-			if(MMC_select()) res = RES_OK;
-			break;
-
-		case GET_SECTOR_COUNT :	/* Get number of sectors on the disk (DWORD) */
-			if ((MMC_send_cmd(CMD9, 0) == 0) && MMC_ReceiveDataBlock(csd, 16)) {
-				if ((csd[0] >> 6) == 1) {	/* SDC ver 2.00 */
-					csize = csd[9] + ((WORD)csd[8] << 8) + ((DWORD)(csd[7] & 63) << 16) + 1;
-					*(DWORD*)buff = csize << 10;
-				} else {					/* SDC ver 1.XX or MMC*/
-					n = (BYTE)((csd[5] & 15) + ((csd[10] & 128) >> 7) + ((csd[9] & 3) << 1) + 2);
-					csize = (csd[8] >> 6) + ((WORD)csd[7] << 2) + ((WORD)(csd[6] & 3) << 10) + 1;
-					*(DWORD*)buff = csize << (n - 9);
-				}
-				res = RES_OK;
-			}
-			break;
-
-		case GET_SECTOR_SIZE :	/* Get sector size (WORD) */
-			*(WORD*)buff = 512;
-			res = RES_OK;
-			break;
-
-		case GET_BLOCK_SIZE :	/* Get erase block size in unit of sector (DWORD) */
-			if (CardType & CT_SD2) {	/* SDv2? */
-				if (MMC_send_cmd(ACMD13, 0) == 0) {	/* Read SD status */
-					MMC_SendSPI(0xFF);
-					if (MMC_ReceiveDataBlock(csd, 16)) {				/* Read partial block */
-						for (n = 64 - 16; n; n--) MMC_SendSPI(0xFF);	/* Purge trailing data */
-						*(DWORD*)buff = 16UL << (csd[10] >> 4);
-						res = RES_OK;
-					}
-				}
-			} else {					/* SDv1 or MMCv3 */
-				if ((MMC_send_cmd(CMD9, 0) == 0) && MMC_ReceiveDataBlock(csd, 16)) {	/* Read CSD */
-					if (CardType & CT_SD1) {	/* SDv1 */
-						*(DWORD*)buff = (((WORD)(csd[10] & 63) << 1) + ((WORD)(csd[11] & 128) >> 7) + 1) << ((csd[13] >> 6) - 1);
-					} else {					/* MMCv3 */
-						*(DWORD*)buff = ((DWORD)((csd[10] & 124) >> 2) + 1) * ((BYTE)(((csd[11] & 3) << 3) + ((csd[11] & 224) >> 5) + 1));
-					}
-					res = RES_OK;
-				}
-			}
-			break;
-#if 0
-		case CTRL_ERASE_SECTOR :	/* Erase a block of sectors (used when _USE_ERASE == 1) */
-			if (!(CardType & CT_SDC)) break;				/* Check if the card is SDC */
-			if (disk_ioctl(drv, MMC_GET_CSD, csd)) break;	/* Get CSD */
-			if (!(csd[0] >> 6) && !(csd[10] & 0x40)) break;	/* Check if sector erase can be applied to the card */
-			dp = buff; st = dp[0]; ed = dp[1];				/* Load sector block */
-			if (!(CardType & CT_BLOCK)) {
-				st *= 512; ed *= 512;
-			}
-			if (send_cmd(CMD32, st) == 0 && send_cmd(CMD33, ed) == 0 && send_cmd(CMD38, 0) == 0 && wait_ready(30000))	/* Erase sector block */
-				res = RES_OK;	/* FatFs does not check result of this command */
-			break;
+		return res;
 #endif
-		/* Following commands are never used by FatFs module */
-
-		case MMC_GET_TYPE :		/* Get card type flags (1 byte) */
-			*ptr = CardType;
-			res = RES_OK;
-			break;
-
-		case MMC_GET_CSD :		/* Receive CSD as a data block (16 bytes) */
-			if (MMC_send_cmd(CMD9, 0) == 0		/* READ_CSD */
-				&& MMC_ReceiveDataBlock(ptr, 16))
-				res = RES_OK;
-			break;
-
-		case MMC_GET_CID :		/* Receive CID as a data block (16 bytes) */
-			if (MMC_send_cmd(CMD10, 0) == 0		/* READ_CID */
-				&& MMC_ReceiveDataBlock(ptr, 16))
-				res = RES_OK;
-			break;
-
-		case MMC_GET_OCR :		/* Receive OCR as an R3 resp (4 bytes) */
-			if (MMC_send_cmd(CMD58, 0) == 0) {	/* READ_OCR */
-				for (n = 4; n; n--) *ptr++ = MMC_SendSPI(0xFF);
-				res = RES_OK;
-			}
-			break;
-
-		case MMC_GET_SDSTAT :	/* Receive SD statsu as a data block (64 bytes) */
-			if (MMC_send_cmd(ACMD13, 0) == 0) {	/* SD_STATUS */
-				MMC_SendSPI(0xFF);
-				if (MMC_ReceiveDataBlock(ptr, 64))
-					res = RES_OK;
-			}
-			break;
-
-		default:
-			res = RES_PARERR;
-		}
-
-		MMC_deselect();
+	default:
+		res = RES_PARERR;
 	}
+
+	MMC_deselect();
 
 	return res;
 }

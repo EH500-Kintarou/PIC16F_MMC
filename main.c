@@ -70,6 +70,9 @@ void setup()
 	LED_TRIS = 0;
 	
 	MMC_Init();
+	
+	INTCONbits.PEIE = 1;
+	INTCONbits.GIE = 1;
 }
 
 void loop()
