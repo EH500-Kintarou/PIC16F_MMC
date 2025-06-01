@@ -23,4 +23,5 @@ PIC16F18857など、一部のEnhanced midrange PIC16Fシリーズは、FATファ
 
 # 回路図
 
-![Circuit Diagram](https://raw.githubusercontent.com/EH500-Kintarou/PIC16F_MMC/master/Images/circuit.png)
+![Circuit Diagram](https://raw.githubusercontent.com/EH500-Kintarou/PIC16F_MMC/refs/heads/main/images/circuit.png)
+

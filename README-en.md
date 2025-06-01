@@ -21,4 +21,4 @@ This project is a sample project for reading and writing MMC using ChaN's FatFs.
 
 # 回路図
 
-![Circuit Diagram](https://raw.githubusercontent.com/EH500-Kintarou/PIC16F_MMC/master/Images/circuit.png)
+![Circuit Diagram](https://raw.githubusercontent.com/EH500-Kintarou/PIC16F_MMC/refs/heads/main/images/circuit.png)
