@@ -14,9 +14,6 @@
 #include "diskio_hardware.h"
 
 
-#define _XTAL_FREQ 32e6
-
-
 /* Definitions for MMC/SDC command */
 #define CMD0	(0)			/* GO_IDLE_STATE */
 #define CMD1	(1)			/* SEND_OP_COND (MMC) */
@@ -147,11 +144,14 @@ int MMC_wait_ready(UINT wt)
 {
 	BYTE d;
 
-	do {
+	wt *= 10;
+	while(wt--) {
 		d = MMC_SendSPI(0xFF);
-	} while (d != 0xFF && --wt);
-
-	return (d == 0xFF) ? 1 : 0;
+		if(d == 0xFF)
+			return 1;
+		__delay_us(100);
+	}
+	return 0;
 }
 
 
@@ -241,12 +241,13 @@ BYTE MMC_send_cmd(BYTE cmd, DWORD arg)
 int MMC_ReceiveDataBlock(BYTE *buff, UINT btr)
 {
 	BYTE token;
-    DWORD retry;
 
-	retry = 200000;
-	do {							/* Wait for data packet in timeout of 200ms */
+	for(UINT i = 0; i < 2000; i++) {	/* Wait for data packet in timeout of 200ms */
 		token = MMC_SendSPI(0xFF);
-	} while((token == 0xFF) && --retry);
+		if(token != 0xFF)
+			break;
+		__delay_us(100);
+	}
 	if(token != 0xFE)
         return 0;	/* If not valid data token, retutn with error */
 
@@ -310,7 +311,7 @@ DSTATUS disk_initialize (
 )
 {
     BYTE n, cmd, ty, ocr[4];
-    DWORD retry;
+	UINT tmr;
 
     if(pdrv != DEV_MMC)
         return STA_NOINIT;    
@@ -325,25 +326,36 @@ DSTATUS disk_initialize (
         MMC_SendSPI(0xFF);  /* 80 dummy clocks */
 
 	ty = 0;
-	if (MMC_send_cmd(CMD0, 0) == 1) {			/* Enter Idle state */
-		retry = 1000000;						/* Initialization timeout of 1000 msec */
-		if (MMC_send_cmd(CMD8, 0x1AA) == 1) {	/* SDv2? */
-			for (n = 0; n < 4; n++) ocr[n] = MMC_SendSPI(0xFF);		/* Get trailing return value of R7 resp */
-			if (ocr[2] == 0x01 && ocr[3] == 0xAA) {				/* The card can work at vdd range of 2.7-3.6V */
-				while (--retry && MMC_send_cmd(ACMD41, 1UL << 30));	/* Wait for leaving idle state (ACMD41 with HCS bit) */
-				if (retry && MMC_send_cmd(CMD58, 0) == 0) {		/* Check CCS bit in the OCR */
-					for (n = 0; n < 4; n++) ocr[n] = MMC_SendSPI(0xFF);
+	if(MMC_send_cmd(CMD0, 0) == 1) {			/* Enter Idle state */
+		if(MMC_send_cmd(CMD8, 0x1AA) == 1) {	/* SDv2? */
+			for(n = 0; n < 4; n++)
+				ocr[n] = MMC_SendSPI(0xFF);		/* Get trailing return value of R7 resp */
+			if(ocr[2] == 0x01 && ocr[3] == 0xAA) {		/* The card can work at vdd range of 2.7-3.6V */
+				for(tmr = 1000; tmr; tmr--) {			/* Wait for leaving idle state (ACMD41 with HCS bit) */
+					if(MMC_send_cmd(ACMD41, 1UL << 30) == 0)
+						break;
+					__delay_ms(1);
+				}
+				if(tmr && MMC_send_cmd(CMD58, 0) == 0) {		/* Check CCS bit in the OCR */
+					for(n = 0; n < 4; n++)
+						ocr[n] = MMC_SendSPI(0xFF);
 					ty = (ocr[0] & 0x40) ? CT_SD2 | CT_BLOCK : CT_SD2;	/* SDv2 */
 				}
 			}
 		} else {							/* SDv1 or MMCv3 */
-			if (MMC_send_cmd(ACMD41, 0) <= 1) 	{
-				ty = CT_SD1; cmd = ACMD41;	/* SDv1 */
+			if(MMC_send_cmd(ACMD41, 0) <= 1) 	{
+				ty = CT_SD1;
+				cmd = ACMD41;	/* SDv1 */
 			} else {
-				ty = CT_MMC; cmd = CMD1;	/* MMCv3 */
+				ty = CT_MMC;
+				cmd = CMD1;	/* MMCv3 */
 			}
-			while (--retry && MMC_send_cmd(cmd, 0));			/* Wait for leaving idle state */
-			if (!retry || MMC_send_cmd(CMD16, 512) != 0)	/* Set R/W block length to 512 */
+			for(tmr = 1000; tmr; tmr--) {			/* Wait for leaving idle state */
+				if(MMC_send_cmd(cmd, 0) == 0)
+					break;
+				__delay_ms(1);
+			}
+			if(!tmr || MMC_send_cmd(CMD16, 512) != 0)	/* Set R/W block length to 512 */
 				ty = 0;
 		}
 	}

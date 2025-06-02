@@ -3,6 +3,8 @@
 
 #include <xc.h> // include processor files - each processor file is guarded.  
 
+#define _XTAL_FREQ 32e6
+
 /* Definitions of physical drive number for each drive */
 #define DEV_MMC		0	/* Example: Map MMC/SD card to physical drive 1 */
 
