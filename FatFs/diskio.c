@@ -140,7 +140,7 @@ void MMC_SendBytesSPI(const BYTE *p, UINT cnt)
 /* Wait for card ready                                                   */
 /*-----------------------------------------------------------------------*/
 
-int MMC_wait_ready(UINT wt)
+uint8_t MMC_wait_ready(UINT wt)
 {
 	BYTE d;
 
